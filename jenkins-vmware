@@ -1,0 +1,60 @@
+#!/bin/bash -ex
+
+#####################################################################
+# Jenkins & VMware Fusion Integration
+# @author Kenichi Maehashi
+#####################################################################
+
+# Parameters
+VM_HOST="${1}"; shift
+VM_USER="${1}"; shift
+VM_VMX_PATH="${1}"; shift
+VM_SNAPSHOT="${1}"; shift
+
+# Environment Specific Configuration
+JENKINS_URL_BASE="http://192.168.34.1:8080"
+VMRUN="/Applications/VMware Fusion.app/Contents/Library/vmrun"
+SSH_OPTS="-oUserKnownHostsFile=/dev/null -oStrictHostKeyChecking=no"
+
+# VM Controll Functions
+vm_start() {
+  "${VMRUN}" start "${VM_VMX_PATH}" nogui
+}
+
+vm_restore() {
+  if [ ! -z "${VM_SNAPSHOT}" ]; then
+    "${VMRUN}" revertToSnapshot "${VM_VMX_PATH}" "${VM_SNAPSHOT}"
+  elif vm_is_running; then
+    "${VMRUN}" stop "${VM_VMX_PATH}" soft
+  fi
+}
+
+vm_is_running() {
+  if [ "${VMRUN}" list | grep -Fx "${VM_VMX_PATH}" ]; then
+    return 0
+  fi &> /dev/null
+  return 1
+}
+
+# Main
+main() {
+  # Restore the VM first.
+  vm_restore
+
+  # Always restore the VM after this script.
+  trap vm_restore EXIT
+
+  # Start the VM.
+  vm_start
+
+  # Wait for the SSH server in the VM to become ready.
+  for i in $(seq 6); do
+    nc -z "${VM_HOST}" 22 && break
+    sleep 5
+  done
+
+  # Start the slave agent.
+  ssh ${SSH_OPTS} -l "${VM_USER}" "${VM_HOST}" "cd \"${WORKSPACE}\"; curl -o slave.jar \"${JENKINS_URL_BASE}/jnlpJars/slave.jar\"; java -jar slave.jar"
+}
+
+main
